@@ -1,0 +1,67 @@
+name: Update Raspberry Pi Firmware
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # Jede volle Stunde
+  workflow_dispatch:     # Manuelles Starten
+
+jobs:
+  check-and-update:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout eigenes Repo
+      uses: actions/checkout@v4
+
+    - name: Install git
+      run: sudo apt-get install -y git
+
+    - name: Hole neuesten Commit von raspberrypi/firmware
+      id: get_commit
+      run: |
+        COMMIT=$(git ls-remote https://github.com/raspberrypi/firmware.git refs/heads/master | cut -f1)
+        echo "commit_hash=$COMMIT" >> $GITHUB_OUTPUT
+
+    - name: Lade vorherigen Commit-Hash
+      id: load_previous
+      run: |
+        if [ -f .rpi-firmware.commit ]; then
+          echo "previous_commit=$(cat .rpi-firmware.commit)" >> $GITHUB_OUTPUT
+        else
+          echo "previous_commit=none" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Prüfe ob Update notwendig ist
+      id: check_update
+      run: |
+        if [ "${{ steps.load_previous.outputs.previous_commit }}" != "${{ steps.get_commit.outputs.commit_hash }}" ]; then
+          echo "update_needed=true" >> $GITHUB_OUTPUT
+        else
+          echo "update_needed=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Klone raspberrypi/firmware wenn Update nötig
+      if: steps.check_update.outputs.update_needed == 'true'
+      run: |
+        git clone --depth=1 https://github.com/raspberrypi/firmware.git rpi-firmware
+
+    - name: Kopiere neue Firmware-Dateien
+      if: steps.check_update.outputs.update_needed == 'true'
+      run: |
+        rm -rf boot/
+        mkdir -p boot
+        cp -r rpi-firmware/boot/* boot/
+
+    - name: Speichere neuen Commit-Hash
+      if: steps.check_update.outputs.update_needed == 'true'
+      run: |
+        echo "${{ steps.get_commit.outputs.commit_hash }}" > .rpi-firmware.commit
+
+    - name: Commit & Push Änderungen
+      if: steps.check_update.outputs.update_needed == 'true'
+      run: |
+        git config user.name "github-actions"
+        git config user.email "github-actions@github.com"
+        git add boot/ .rpi-firmware.commit
+        git commit -m "Update firmware from raspberrypi/firmware @ ${{ steps.get_commit.outputs.commit_hash }}"
+        git push
